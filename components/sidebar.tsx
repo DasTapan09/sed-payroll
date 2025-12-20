@@ -24,7 +24,7 @@ export function Sidebar() {
     <div className="flex h-screen w-64 flex-col bg-card border-r border-border">
       <div className="flex h-16 items-center gap-2 border-b border-border px-6">
         <DollarSign className="h-8 w-8 text-primary" />
-        <span className="text-xl font-bold text-foreground">PayrollPro</span>
+        <span className="text-xl font-bold text-foreground">SedPay</span>
       </div>
       <nav className="flex-1 space-y-1 p-4">
         {navigation.map((item) => {

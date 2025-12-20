@@ -67,7 +67,7 @@ export default function LoginPage() {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <Lock className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle className="text-2xl font-bold">PayrollPro</CardTitle>
+          <CardTitle className="text-2xl font-bold">SedPay</CardTitle>
           <CardDescription>Sign in to access the payroll management system</CardDescription>
         </CardHeader>
         <CardContent>

@@ -23,6 +23,7 @@ export default function EmployeesPage() {
     try {
       const response = await fetch("/api/employees")
       const data = await response.json()
+      console.log(data)
       setEmployees(data)
     } catch (error) {
       toast({
