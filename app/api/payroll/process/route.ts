@@ -1,72 +1,84 @@
 import { NextResponse } from "next/server"
 import { dataStore } from "@/lib/data-store"
-import type { Payslip } from "@/lib/types"
+import type { SalaryStructure } from "@/lib/types"
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
-    const { payrollRunId } = body
+    const { payrollRunId } = await request.json()
 
-    const employees = (await dataStore.getEmployees()).filter((e) => e.isActive)
-    const deductions = await dataStore.getDeductions()
-    const payslips: Payslip[] = []
+    const payrollRun = await dataStore.getPayrollRunById(payrollRunId)
+    if (!payrollRun) {
+      return NextResponse.json(
+        { error: "Payroll run not found" },
+        { status: 404 }
+      )
+    }
+
+    if (payrollRun.status !== "Draft") {
+      return NextResponse.json(
+        { error: "Payroll already processed" },
+        { status: 400 }
+      )
+    }
+
+    const employees = await dataStore.getEmployees()
+    const salaryStructures = await dataStore.getSalaryStructures()
+
+    const structureMap = new Map(
+      salaryStructures.map((s) => [s.id, s])
+    )
 
     for (const employee of employees) {
-      const salaryStructure = await dataStore.getSalaryStructure(employee.salaryStructureId)
-      if (!salaryStructure) continue
+      if (!employee.isActive) continue
 
-      // Calculate working days and present days
-      const attendance = await dataStore.getAttendance(employee.id)
-      const workingDays = attendance.length
-      const presentDays = attendance.filter((a) => a.status === "Present" || a.status === "WFH").length
-      const leaveDays = workingDays - presentDays
+      const structure = structureMap.get(employee.salaryStructureId)
+      if (!structure) continue
 
-      // Calculate salary components
-      const basicSalary = (salaryStructure.basicSalary / workingDays) * presentDays
-      const hra = (salaryStructure.hra / workingDays) * presentDays
-      const specialAllowance = (salaryStructure.specialAllowance / workingDays) * presentDays
-      const bonus = salaryStructure.bonus
-      const variablePay = salaryStructure.variablePay
+      const grossSalary =
+        structure.basicSalary +
+        structure.hra +
+        structure.specialAllowance +
+        structure.bonus +
+        structure.variablePay
 
-      const grossSalary = basicSalary + hra + specialAllowance + bonus + variablePay
+      const incomeTax = Math.round(grossSalary * 0.1)
+      const providentFund = structure.employerPF
+      const insurance = structure.insurance
 
-      // Calculate deductions
-      const incomeTax = grossSalary * 0.1
-      const providentFund = basicSalary * 0.12
-      const insurance = 500
-      const loanDeduction = 0
+      const totalDeductions =
+        incomeTax + providentFund + insurance
 
-      const totalDeductions = incomeTax + providentFund + insurance + loanDeduction
       const netSalary = grossSalary - totalDeductions
 
-      const payslip: Payslip = {
-        id: `payslip-${employee.id}-${Date.now()}`,
+      const payslip = {
+        id: `payslip-${employee.id}-${payrollRun.id}`,
         employeeId: employee.id,
-        payrollRunId,
-        period: new Date().toISOString().slice(0, 7),
-        basicSalary,
-        hra,
-        specialAllowance,
-        bonus,
-        variablePay,
+        payrollRunId: payrollRun.id,
+        period: payrollRun.period,
+
+        basicSalary: structure.basicSalary,
+        hra: structure.hra,
+        specialAllowance: structure.specialAllowance,
+        bonus: structure.bonus,
+        variablePay: structure.variablePay,
+
         grossSalary,
         incomeTax,
         providentFund,
         insurance,
-        loanDeduction,
+        loanDeduction: 0,
         totalDeductions,
         netSalary,
-        workingDays,
-        presentDays,
-        leaveDays,
+
+        workingDays: 22,
+        presentDays: 20,
+        leaveDays: 2,
       }
 
       await dataStore.addPayslip(payslip)
-      payslips.push(payslip)
     }
 
-    // Update payroll run status
-    await dataStore.updatePayrollRun(payrollRunId, {
+    const updatedRun = await dataStore.updatePayrollRun(payrollRun.id, {
       status: "Processed",
       processedDate: new Date().toISOString(),
       processedBy: "admin",
@@ -78,12 +90,16 @@ export async function POST(request: Request) {
       userId: "admin",
       action: "PROCESS",
       entity: "payroll_run",
-      entityId: payrollRunId,
-      changes: { payslipsGenerated: payslips.length },
+      entityId: payrollRun.id,
+      changes: updatedRun,
     })
 
-    return NextResponse.json({ success: true, payslips })
+    return NextResponse.json(updatedRun)
   } catch (error) {
-    return NextResponse.json({ error: "Failed to process payroll" }, { status: 500 })
+    console.error("PROCESS PAYROLL ERROR:", error)
+    return NextResponse.json(
+      { error: "Failed to process payroll" },
+      { status: 500 }
+    )
   }
 }

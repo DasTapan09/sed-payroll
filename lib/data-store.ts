@@ -208,6 +208,28 @@ async updateLeaveBalance(
       .map((p) => JSON.parse(p as string))
   },
 
+  async addPayrollRun(payrollRun: PayrollRun): Promise<PayrollRun> {
+    const redis = await getRedisClient()
+
+    // store as a top-level key to match seed script / getPayrollRuns usage
+    await redis.set(`payroll-run:${payrollRun.id}`, JSON.stringify(payrollRun))
+
+    return payrollRun
+  },
+
+  async updatePayrollRun(id: string, updates: Partial<PayrollRun>): Promise<PayrollRun> {
+    const redis = await getRedisClient()
+    const raw = await redis.get(`payroll-run:${id}`)
+    if (!raw) throw new Error("Payroll run not found")
+
+    const run: PayrollRun = JSON.parse(raw)
+    const updatedRun: PayrollRun = { ...run, ...updates }
+
+    await redis.set(`payroll-run:${id}`, JSON.stringify(updatedRun))
+
+    return updatedRun
+  },
+
   /* =======================
  * SALARY STRUCTURES
  * ======================= */
@@ -264,5 +286,22 @@ async updateLeaveBalance(
         new Date(a.timestamp).getTime()
     )
   },
+
+  /* =======================
+ * PAYROLL PROCESSING
+ * ======================= */
+
+async getPayrollRunById(id: string): Promise<PayrollRun | null> {
+  const redis = await getRedisClient()
+  const raw = await redis.get(`payroll-run:${id}`)
+  return raw ? JSON.parse(raw) : null
+},
+
+async addPayslip(payslip: Payslip): Promise<Payslip> {
+  const redis = await getRedisClient()
+  await redis.set(`payslip:${payslip.id}`, JSON.stringify(payslip))
+  return payslip
+},
+
 
 }
