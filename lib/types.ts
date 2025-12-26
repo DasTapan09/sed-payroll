@@ -49,6 +49,8 @@ export interface Attendance {
   status: AttendanceStatus
   overtimeHours: number
   notes?: string
+  checkInTime?: string
+  checkOutTime?: string
 }
 
 export interface Leave {
