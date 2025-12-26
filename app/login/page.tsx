@@ -91,10 +91,10 @@ export default function LoginPage() {
           </form>
 
           {/* Demo credentials helper */}
-          <div className="mt-4 text-xs text-muted-foreground">
+          {/* <div className="mt-4 text-xs text-muted-foreground">
             <p><strong>Admin:</strong> admin@demo.com / admin123</p>
             <p><strong>Employee:</strong> emp1@demo.com / emp123</p>
-          </div>
+          </div> */}
         </CardContent>
       </Card>
     </div>
