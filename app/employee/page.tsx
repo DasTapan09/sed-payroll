@@ -1,46 +1,52 @@
+// app/employee/page.tsx
 import { getCurrentUser } from "@/lib/auth"
 import { redirect } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getRedisClient } from "@/lib/redis"
 import type { Attendance, Payslip } from "@/lib/types"
+import { redis } from "@/lib/redis"
 
 export default async function EmployeeDashboard() {
   const user = await getCurrentUser()
   if (!user) redirect("/login")
-
   if (user.role !== "employee") redirect("/")
 
-  const redis = await getRedisClient()
+  /* ======================
+   * Attendance Summary
+   * ====================== */
 
-  // ---- Attendance (current month) ----
-  const attendanceKeys = await redis.keys("attendance:*")
+  const attendanceMap =
+    await redis.hgetall<Record<string, Attendance>>(
+      "payroll:attendance"
+    )
+
   let presentDays = 0
   let absentDays = 0
 
-  for (const key of attendanceKeys) {
-    const value = await redis.get(key)
-    if (!value) continue
+  if (attendanceMap) {
+    for (const record of Object.values(attendanceMap)) {
+      if (record.employeeId !== user.employeeId) continue
 
-    const record = JSON.parse(value) as Attendance
-    if (record.employeeId !== user.employeeId) continue
-
-    if (record.status === "Present") presentDays++
-    if (record.status === "Absent") absentDays++
+      if (record.status === "Present") presentDays++
+      if (record.status === "Absent") absentDays++
+    }
   }
 
-  // ---- Last payslip ----
+  /* ======================
+   * Last Payslip
+   * ====================== */
+
   const payslipKeys = await redis.keys("payslip:*")
   let lastPayslip: Payslip | null = null
 
-  for (const key of payslipKeys) {
-    const value = await redis.get(key)
-    if (!value) continue
+  if (payslipKeys.length > 0) {
+    const payslips = await redis.mget<Payslip[]>(payslipKeys)
 
-    const payslip = JSON.parse(value) as Payslip
-    if (payslip.employeeId !== user.employeeId) continue
+    for (const p of payslips.filter(Boolean) as Payslip[]) {
+      if (p.employeeId !== user.employeeId) continue
 
-    if (!lastPayslip || payslip.period > lastPayslip.period) {
-      lastPayslip = payslip
+      if (!lastPayslip || p.period > lastPayslip.period) {
+        lastPayslip = p
+      }
     }
   }
 
@@ -55,8 +61,12 @@ export default async function EmployeeDashboard() {
             <CardTitle>Attendance Summary</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-sm">Present days: <strong>{presentDays}</strong></p>
-            <p className="text-sm">Absent days: <strong>{absentDays}</strong></p>
+            <p className="text-sm">
+              Present days: <strong>{presentDays}</strong>
+            </p>
+            <p className="text-sm">
+              Absent days: <strong>{absentDays}</strong>
+            </p>
           </CardContent>
         </Card>
 
@@ -68,8 +78,13 @@ export default async function EmployeeDashboard() {
           <CardContent className="space-y-2">
             {lastPayslip ? (
               <>
-                <p className="text-sm">Period: <strong>{lastPayslip.period}</strong></p>
-                <p className="text-sm">Net Salary: <strong>₹{lastPayslip.netSalary}</strong></p>
+                <p className="text-sm">
+                  Period: <strong>{lastPayslip.period}</strong>
+                </p>
+                <p className="text-sm">
+                  Net Salary:{" "}
+                  <strong>₹{lastPayslip.netSalary}</strong>
+                </p>
               </>
             ) : (
               <p className="text-sm text-muted-foreground">

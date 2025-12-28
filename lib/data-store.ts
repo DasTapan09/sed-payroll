@@ -1,4 +1,5 @@
-import { getRedisClient } from "@/lib/redis"
+// lib/data-store.ts
+import { redis } from "@/lib/redis"
 import type {
   Employee,
   Leave,
@@ -8,12 +9,11 @@ import type {
   Payslip,
   SalaryStructure,
   AuditLog,
-  Deduction
+  Deduction,
 } from "@/lib/types"
 
 /**
  * Redis key helpers
- * (explicit instead of abstracted, to match your codebase)
  */
 const leaveKey = (id: string) => `leave:${id}`
 
@@ -22,78 +22,79 @@ export const dataStore = {
    * EMPLOYEES
    * ======================= */
 
-
   async getEmployees(): Promise<Employee[]> {
-    const redis = await getRedisClient()
-    const employees = await redis.hGetAll("payroll:employees")
+    const employees =
+      await redis.hgetall<Record<string, Employee>>(
+        "payroll:employees"
+      )
 
-    return Object.values(employees).map((e) => JSON.parse(e))
+    if (!employees) return []
+    return Object.values(employees)
   },
 
   async getEmployeeById(id: string): Promise<Employee | null> {
-    const redis = await getRedisClient()
-    const raw = await redis.hGet("payroll:employees", id)
-
-    return raw ? JSON.parse(raw) : null
+    return (
+      await redis.hget<Employee>(
+        "payroll:employees",
+        id
+      )
+    ) ?? null
   },
 
-  async updateEmployee(id: string, updates: Partial<Employee>) {
-    const redis = await getRedisClient()
+  async updateEmployee(
+    id: string,
+    updates: Partial<Employee>
+  ): Promise<Employee> {
     const employee = await this.getEmployeeById(id)
     if (!employee) throw new Error("Employee not found")
 
     const updated = { ...employee, ...updates }
-    await redis.hSet(
-      "payroll:employees",
-      id,
-      JSON.stringify(updated)
-    )
+
+    await redis.hset("payroll:employees", {
+      [id]: updated,
+    })
 
     return updated
   },
-  
+
   /* =======================
    * LEAVE BALANCE
    * ======================= */
 
+  async getLeaveBalance(
+    employeeId: string
+  ): Promise<LeaveBalance> {
+    return (
+      await redis.hget<LeaveBalance>(
+        "payroll:leave_balances",
+        employeeId
+      )
+    ) ?? {
+      employeeId,
+      casual: 0,
+      sick: 0,
+      paid: 0,
+    }
+  },
 
-  async getLeaveBalance(employeeId: string): Promise<LeaveBalance> {
-  const redis = await getRedisClient()
-  const raw = await redis.hGet(
-    "payroll:leave_balances",
-    employeeId
-  )
+  async updateLeaveBalance(
+    employeeId: string,
+    updates: Partial<LeaveBalance>
+  ): Promise<LeaveBalance> {
+    const current = await this.getLeaveBalance(employeeId)
+    const updated = { ...current, ...updates }
 
-  if (raw) return JSON.parse(raw)
+    await redis.hset("payroll:leave_balances", {
+      [employeeId]: updated,
+    })
 
-  return {
-    employeeId,
-    casual: 0,
-    sick: 0,
-    paid: 0,
-  }
-},
-
-async updateLeaveBalance(
-  employeeId: string,
-  updates: Partial<LeaveBalance>
-) {
-  const redis = await getRedisClient()
-  const current = await this.getLeaveBalance(employeeId)
-
-  const updated = { ...current, ...updates }
-
-  await redis.hSet(
-    "payroll:leave_balances",
-    employeeId,
-    JSON.stringify(updated)
-  )
-
-  return updated
-},
+    return updated
+  },
 
   async deductLeaveBalance(leave: Leave) {
-    const balance = await this.getLeaveBalance(leave.employeeId)
+    const balance = await this.getLeaveBalance(
+      leave.employeeId
+    )
 
     const key =
       leave.leaveType === "Casual"
@@ -102,11 +103,15 @@ async updateLeaveBalance(
         ? "sick"
         : "paid"
 
-    const remaining = Math.max(0, balance[key] - leave.days)
-
-    await this.updateLeaveBalance(leave.employeeId, {
-      [key]: remaining,
-    })
+    await this.updateLeaveBalance(
+      leave.employeeId,
+      {
+        [key]: Math.max(
+          0,
+          balance[key] - leave.days
+        ),
+      }
+    )
   },
 
   /* =======================
@@ -114,36 +119,36 @@ async updateLeaveBalance(
    * ======================= */
 
   async getLeaves(): Promise<Leave[]> {
-    const redis = await getRedisClient()
     const keys = await redis.keys("leave:*")
     if (keys.length === 0) return []
 
-    const leaves = await redis.mGet(keys)
-    return leaves
-      .filter(Boolean)
-      .map((l) => JSON.parse(l as string))
+    const leaves = await redis.mget<Leave[]>(keys)
+    return leaves.filter(Boolean) as Leave[]
   },
 
-  async getLeavesByEmployeeId(employeeId: string): Promise<Leave[]> {
+  async getLeavesByEmployeeId(
+    employeeId: string
+  ): Promise<Leave[]> {
     const leaves = await this.getLeaves()
-    return leaves.filter((l) => l.employeeId === employeeId)
+    return leaves.filter(
+      (l) => l.employeeId === employeeId
+    )
   },
 
-  async createLeave(leave: Leave) {
-    const redis = await getRedisClient()
-    await redis.set(leaveKey(leave.id), JSON.stringify(leave))
+  async createLeave(leave: Leave): Promise<Leave> {
+    await redis.set(leaveKey(leave.id), leave)
     return leave
   },
 
-  async updateLeave(id: string, updates: Partial<Leave>) {
-    const redis = await getRedisClient()
-    const raw = await redis.get(leaveKey(id))
-    if (!raw) throw new Error("Leave not found")
+  async updateLeave(
+    id: string,
+    updates: Partial<Leave>
+  ): Promise<Leave> {
+    const leave = await redis.get<Leave>(
+      leaveKey(id)
+    )
+    if (!leave) throw new Error("Leave not found")
 
-    const leave: Leave = JSON.parse(raw)
-    const updatedLeave = { ...leave, ...updates }
-
-    // ✅ Deduct balance ONLY on first approval
     if (
       leave.status !== "Approved" &&
       updates.status === "Approved"
@@ -151,12 +156,10 @@ async updateLeaveBalance(
       await this.deductLeaveBalance(leave)
     }
 
-    await redis.set(
-      leaveKey(id),
-      JSON.stringify(updatedLeave)
-    )
+    const updated = { ...leave, ...updates }
+    await redis.set(leaveKey(id), updated)
 
-    return updatedLeave
+    return updated
   },
 
   /* =======================
@@ -164,144 +167,149 @@ async updateLeaveBalance(
    * ======================= */
 
   async getAttendance(): Promise<Attendance[]> {
-    const redis = await getRedisClient()
-    const records = await redis.hGetAll("payroll:attendance")
+    const records =
+      await redis.hgetall<Record<string, Attendance>>(
+        "payroll:attendance"
+      )
 
-    return Object.values(records).map((r) =>
-      JSON.parse(r)
-    )
+    if (!records) return []
+    return Object.values(records)
   },
 
+  /* =======================
+   * DEDUCTIONS
+   * ======================= */
+
   async getDeductions(): Promise<Deduction[]> {
-  const redis = await getRedisClient()
-  const deductions = await redis.hGetAll("payroll:deductions")
+    const deductions =
+      await redis.hgetall<Record<string, Deduction>>(
+        "payroll:deductions"
+      )
 
-  return Object.values(deductions).map((d) =>
-    JSON.parse(d)
-  )
-},
-
+    if (!deductions) return []
+    return Object.values(deductions)
+  },
 
   /* =======================
    * PAYROLL
    * ======================= */
 
   async getPayrollRuns(): Promise<PayrollRun[]> {
-    const redis = await getRedisClient()
     const keys = await redis.keys("payroll-run:*")
     if (keys.length === 0) return []
 
-    const runs = await redis.mGet(keys)
-    return runs
-      .filter(Boolean)
-      .map((r) => JSON.parse(r as string))
+    const runs = await redis.mget<PayrollRun[]>(keys)
+    return runs.filter(Boolean) as PayrollRun[]
   },
 
-  async getPayslips(): Promise<Payslip[]> {
-    const redis = await getRedisClient()
-    const keys = await redis.keys("payslip:*")
-    if (keys.length === 0) return []
-
-    const slips = await redis.mGet(keys)
-    return slips
-      .filter(Boolean)
-      .map((p) => JSON.parse(p as string))
+  async getPayrollRunById(
+    id: string
+  ): Promise<PayrollRun | null> {
+    return (
+      await redis.get<PayrollRun>(
+        `payroll-run:${id}`
+      )
+    ) ?? null
   },
 
-  async addPayrollRun(payrollRun: PayrollRun): Promise<PayrollRun> {
-    const redis = await getRedisClient()
-
-    // store as a top-level key to match seed script / getPayrollRuns usage
-    await redis.set(`payroll-run:${payrollRun.id}`, JSON.stringify(payrollRun))
-
+  async addPayrollRun(
+    payrollRun: PayrollRun
+  ): Promise<PayrollRun> {
+    await redis.set(
+      `payroll-run:${payrollRun.id}`,
+      payrollRun
+    )
     return payrollRun
   },
 
-  async updatePayrollRun(id: string, updates: Partial<PayrollRun>): Promise<PayrollRun> {
-    const redis = await getRedisClient()
-    const raw = await redis.get(`payroll-run:${id}`)
-    if (!raw) throw new Error("Payroll run not found")
+  async updatePayrollRun(
+    id: string,
+    updates: Partial<PayrollRun>
+  ): Promise<PayrollRun> {
+    const run = await this.getPayrollRunById(id)
+    if (!run) throw new Error("Payroll run not found")
 
-    const run: PayrollRun = JSON.parse(raw)
-    const updatedRun: PayrollRun = { ...run, ...updates }
+    const updated = { ...run, ...updates }
+    await redis.set(
+      `payroll-run:${id}`,
+      updated
+    )
 
-    await redis.set(`payroll-run:${id}`, JSON.stringify(updatedRun))
-
-    return updatedRun
+    return updated
   },
 
   /* =======================
- * SALARY STRUCTURES
- * ======================= */
+   * PAYSLIPS
+   * ======================= */
 
-  async getSalaryStructures(): Promise<SalaryStructure[]> {
-    const redis = await getRedisClient()
-    const structures = await redis.hGetAll("payroll:salary_structures")
+  async getPayslips(): Promise<Payslip[]> {
+    const keys = await redis.keys("payslip:*")
+    if (keys.length === 0) return []
 
-    return Object.values(structures).map((s) =>
-      JSON.parse(s)
-    )
+    const slips = await redis.mget<Payslip[]>(keys)
+    return slips.filter(Boolean) as Payslip[]
   },
 
-  async addSalaryStructure(structure: SalaryStructure) {
-    const redis = await getRedisClient()
-
-    await redis.hSet(
-      "payroll:salary_structures",
-      structure.id,
-      JSON.stringify(structure)
+  async addPayslip(
+    payslip: Payslip
+  ): Promise<Payslip> {
+    await redis.set(
+      `payslip:${payslip.id}`,
+      payslip
     )
+    return payslip
+  },
 
+  /* =======================
+   * SALARY STRUCTURES
+   * ======================= */
+
+  async getSalaryStructures(): Promise<
+    SalaryStructure[]
+  > {
+    const structures =
+      await redis.hgetall<
+        Record<string, SalaryStructure>
+      >("payroll:salary_structures")
+
+    if (!structures) return []
+    return Object.values(structures)
+  },
+
+  async addSalaryStructure(
+    structure: SalaryStructure
+  ): Promise<SalaryStructure> {
+    await redis.hset(
+      "payroll:salary_structures",
+      { [structure.id]: structure }
+    )
     return structure
   },
 
   /* =======================
-  * AUDIT LOGS
-  * ======================= */
+   * AUDIT LOGS
+   * ======================= */
 
-  async addAuditLog(log: AuditLog) {
-    const redis = await getRedisClient()
+  async addAuditLog(
+    log: AuditLog
+  ): Promise<AuditLog> {
     await redis.set(
       `audit-log:${log.id}`,
-      JSON.stringify(log)
+      log
     )
     return log
   },
 
   async getAuditLogs(): Promise<AuditLog[]> {
-  const redis = await getRedisClient()
-  const keys = await redis.keys("audit-log:*")
+    const keys = await redis.keys("audit-log:*")
+    if (keys.length === 0) return []
 
-  if (keys.length === 0) return []
+    const logs = await redis.mget<AuditLog[]>(keys)
 
-  const logs = await redis.mGet(keys)
-
-  return logs
-    .filter(Boolean)
-    .map((l) => JSON.parse(l as string))
-    // newest first
-    .sort(
+    return (logs.filter(Boolean) as AuditLog[]).sort(
       (a, b) =>
         new Date(b.timestamp).getTime() -
         new Date(a.timestamp).getTime()
     )
   },
-
-  /* =======================
- * PAYROLL PROCESSING
- * ======================= */
-
-async getPayrollRunById(id: string): Promise<PayrollRun | null> {
-  const redis = await getRedisClient()
-  const raw = await redis.get(`payroll-run:${id}`)
-  return raw ? JSON.parse(raw) : null
-},
-
-async addPayslip(payslip: Payslip): Promise<Payslip> {
-  const redis = await getRedisClient()
-  await redis.set(`payslip:${payslip.id}`, JSON.stringify(payslip))
-  return payslip
-},
-
-
 }

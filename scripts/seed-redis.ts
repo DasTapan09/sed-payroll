@@ -1,111 +1,65 @@
+// scripts/seed-redis.ts
 import { randomUUID } from "crypto"
-import { hashPassword } from "../lib/password"
-import type { User } from "../lib/types"
-
 import "dotenv/config"
-import { getRedisClient } from "../lib/redis"
-import type { Employee, SalaryStructure, Attendance, Deduction } from "../lib/types"
 
-function generatePayslip({
-  employee,
-  structure,
-  payrollRunId,
-  period,
-}: {
-  employee: Employee
-  structure: SalaryStructure
-  payrollRunId: string
-  period: string
-}) {
-  const grossSalary =
-    structure.basicSalary +
-    structure.hra +
-    structure.specialAllowance +
-    structure.bonus +
-    structure.variablePay
+import { hashPassword } from "../lib/password"
+import { redis } from "@/lib/redis"
 
-  const incomeTax = Math.round(grossSalary * 0.1)
-  const providentFund = structure.employerPF
-  const insurance = structure.insurance
+import type {
+  User,
+  Employee,
+  SalaryStructure,
+  Attendance,
+  Deduction,
+  LeaveBalance,
+} from "../lib/types"
 
-  const totalDeductions =
-    incomeTax + providentFund + insurance
+/* --------------------------------------------------
+ * Helpers
+ * -------------------------------------------------- */
 
-  const netSalary = grossSalary - totalDeductions
-
-  return {
-    id: `ps-${employee.id}`,
-    employeeId: employee.id,
-    payrollRunId,
-    period,
-
-    basicSalary: structure.basicSalary,
-    hra: structure.hra,
-    specialAllowance: structure.specialAllowance,
-    bonus: structure.bonus,
-    variablePay: structure.variablePay,
-
-    grossSalary,
-    incomeTax,
-    providentFund,
-    insurance,
-    loanDeduction: 0,
-    totalDeductions,
-    netSalary,
-
-    workingDays: 22,
-    presentDays: 20,
-    leaveDays: 2,
+async function clearByPattern(pattern: string) {
+  const keys = await redis.keys(pattern)
+  if (keys.length > 0) {
+    await redis.del(...keys)
+    console.log(`[v0] Deleted ${keys.length} keys for pattern ${pattern}`)
   }
 }
 
-
-async function clearAllUsers(redis: any) {
+async function clearAllUsers() {
   console.log("[v0] Clearing existing users...")
-  
-  // Get all user keys
-  const userKeys = await redis.keys("user:*")
-  
-  if (userKeys.length > 0) {
-    await redis.del(userKeys)
-    console.log(`[v0] Deleted ${userKeys.length} user keys`)
-  }
+  await clearByPattern("user:*")
 }
+
+/* --------------------------------------------------
+ * Seed
+ * -------------------------------------------------- */
 
 async function seedRedisData() {
   console.log("[v0] Starting Redis data seeding...")
-  console.log("REDIS_URL:", process.env.REDIS_URL);
-
 
   try {
-    const redis = await getRedisClient()
+    /* ---------- CLEANUP ---------- */
 
-    await clearAllUsers(redis)
+    await clearAllUsers()
 
-    // Clear existing data
-    console.log("[v0] Clearing existing data...")
-    await redis.del("payroll:employees")
-    await redis.del("payroll:salary_structures")
-    await redis.del("payroll:attendance")
-    await redis.del("payroll:leave_balances")
-    await redis.del("payroll:deductions")
-    await redis.del("payroll:payroll_runs")
-    await redis.del("payroll:payslips")
-    await redis.del("payroll:audit_logs")
+    console.log("[v0] Clearing existing payroll data...")
+    await redis.del(
+      "payroll:employees",
+      "payroll:salary_structures",
+      "payroll:attendance",
+      "payroll:leave_balances",
+      "payroll:deductions",
+      "payroll:payroll_runs",
+      "payroll:payslips",
+      "payroll:audit_logs",
+    )
 
-    const leaveKeys = await redis.keys("leave:*")
-    if (leaveKeys.length > 0) {
-      await redis.del(leaveKeys)
-      console.log(`[v0] Deleted ${leaveKeys.length} leave requests`)
-    }
+    await clearByPattern("leave:*")
+    await clearByPattern("session:*")
 
-    const sessionKeys = await redis.keys("session:*")
-    if (sessionKeys.length > 0) {
-      await redis.del(sessionKeys)
-      console.log(`[v0] Deleted ${sessionKeys.length} session keys`)
-    }
+    /* ---------- SALARY STRUCTURES ---------- */
 
-    // Seed Salary Structures
     console.log("[v0] Seeding salary structures...")
     const salaryStructures: SalaryStructure[] = [
       {
@@ -147,10 +101,13 @@ async function seedRedisData() {
     ]
 
     for (const structure of salaryStructures) {
-      await redis.hSet("payroll:salary_structures", structure.id, JSON.stringify(structure))
+      await redis.hset("payroll:salary_structures", {
+        [structure.id]: structure,
+      })
     }
 
-    // Seed Employees
+    /* ---------- EMPLOYEES ---------- */
+
     console.log("[v0] Seeding employees...")
     const employees: Employee[] = [
       {
@@ -252,186 +209,115 @@ async function seedRedisData() {
     ]
 
     for (const employee of employees) {
-      await redis.hSet("payroll:employees", employee.id, JSON.stringify(employee))
+      await redis.hset("payroll:employees", {
+        [employee.id]: employee,
+      })
 
-      // Initialize leave balance for each employee
-      await redis.hSet(
-        "payroll:leave_balances",
-        employee.id,
-        JSON.stringify({
-          employeeId: employee.id,
-          casual: 10,
-          sick: 7,
-          paid: 15,
-        }),
-      )
+      const balance: LeaveBalance = {
+        employeeId: employee.id,
+        casual: 10,
+        sick: 7,
+        paid: 15,
+      }
+
+      await redis.hset("payroll:leave_balances", {
+        [employee.id]: balance,
+      })
     }
 
-    await seedUsers(redis, employees)
+    await seedUsers(employees)
 
-    // Seed Attendance for current month
-    console.log("[v0] Seeding attendance records...")
+    /* ---------- ATTENDANCE ---------- */
+
+    console.log("[v0] Seeding attendance...")
     const today = new Date()
-    const currentMonth = today.getMonth()
-    const currentYear = today.getFullYear()
+    const year = today.getFullYear()
+    const month = today.getMonth()
 
     for (const emp of employees) {
       for (let day = 1; day <= today.getDate(); day++) {
-        const date = new Date(currentYear, currentMonth, day)
-        if (date.getDay() !== 0 && date.getDay() !== 6) {
-          // Skip weekends
-          const attId = `att-${emp.id}-${date.toISOString().split("T")[0]}`
-          const attendance: Attendance = {
-            id: attId,
-            employeeId: emp.id,
-            date: date.toISOString().split("T")[0],
-            status: Math.random() > 0.1 ? "Present" : Math.random() > 0.5 ? "WFH" : "Absent",
-            overtimeHours: Math.random() > 0.8 ? Math.floor(Math.random() * 3) : 0,
-          }
-          await redis.hSet("payroll:attendance", attId, JSON.stringify(attendance))
+        const date = new Date(year, month, day)
+        if (date.getDay() === 0 || date.getDay() === 6) continue
+
+        const att: Attendance = {
+          id: `att-${emp.id}-${date.toISOString().split("T")[0]}`,
+          employeeId: emp.id,
+          date: date.toISOString().split("T")[0],
+          status: Math.random() > 0.1 ? "Present" : "Absent",
+          overtimeHours: Math.random() > 0.8 ? 2 : 0,
         }
+
+        await redis.hset("payroll:attendance", {
+          [att.id]: att,
+        })
       }
     }
 
-    // Seed Deductions
+    /* ---------- DEDUCTIONS ---------- */
+
     console.log("[v0] Seeding deductions...")
     const deductions: Deduction[] = [
-      {
-        id: "ded-1",
-        name: "Income Tax",
-        type: "percentage",
-        value: 10,
-        applicableToAll: true,
-      },
-      {
-        id: "ded-2",
-        name: "Provident Fund",
-        type: "percentage",
-        value: 12,
-        applicableToAll: true,
-      },
-      {
-        id: "ded-3",
-        name: "Health Insurance",
-        type: "fixed",
-        value: 500,
-        applicableToAll: true,
-      },
+      { id: "ded-1", name: "Income Tax", type: "percentage", value: 10, applicableToAll: true },
+      { id: "ded-2", name: "Provident Fund", type: "percentage", value: 12, applicableToAll: true },
+      { id: "ded-3", name: "Health Insurance", type: "fixed", value: 500, applicableToAll: true },
     ]
 
-    for (const deduction of deductions) {
-      await redis.hSet("payroll:deductions", deduction.id, JSON.stringify(deduction))
+    for (const d of deductions) {
+      await redis.hset("payroll:deductions", {
+        [d.id]: d,
+      })
     }
 
-    console.log("[v0] ✅ Redis data seeding completed successfully!")
-    console.log(`[v0] Seeded ${employees.length} employees`)
-    console.log(`[v0] Seeded ${salaryStructures.length} salary structures`)
-    console.log(`[v0] Seeded ${deductions.length} deductions`)
-    console.log(`[v0] Seeded attendance records for current month`)
-  } catch (error) {
-    console.error("[v0] ❌ Error seeding Redis data:", error)
-    throw error
+    console.log("[v0] ✅ Redis seeding completed successfully")
+  } catch (err) {
+    console.error("[v0] ❌ Seed failed:", err)
+    throw err
   }
 }
 
-async function seedUsers(redis: any, employees: any[]) {
+/* --------------------------------------------------
+ * Users
+ * -------------------------------------------------- */
+
+async function seedUsers(employees: Employee[]) {
   console.log("[v0] Seeding users...")
 
-  // ---------- ADMIN ----------
-  const adminId = randomUUID()
-
-  const adminUser: User = {
-    id: adminId,
+  // Admin
+  const admin: User = {
+    id: randomUUID(),
     email: "admin@demo.com",
     passwordHash: await hashPassword("admin123"),
     role: "admin",
   }
 
-  await redis.set(`user:${adminId}`, JSON.stringify(adminUser))
-  await redis.set(`user:email:${adminUser.email}`, adminId)
+  await redis.set(`user:${admin.id}`, admin)
+  await redis.set(`user:email:${admin.email}`, admin.id)
 
-  console.log("✔ Admin user created → admin@demo.com / admin123")
+  console.log("✔ Admin → admin@demo.com / admin123")
 
-  // ---------- EMPLOYEES ----------
-  for (let i = 0; i < Math.min(2, employees.length); i++) {
+  // Employees
+  for (let i = 0; i < 2; i++) {
     const emp = employees[i]
 
-    const userId = randomUUID()
-    const email = `emp${i + 1}@demo.com`
-
-    const employeeUser: User = {
-      id: userId,
-      email,
+    const user: User = {
+      id: randomUUID(),
+      email: `emp${i + 1}@demo.com`,
       passwordHash: await hashPassword("emp123"),
       role: "employee",
       employeeId: emp.id,
     }
 
-    await redis.set(`user:${userId}`, JSON.stringify(employeeUser))
-    await redis.set(`user:email:${email}`, userId)
+    await redis.set(`user:${user.id}`, user)
+    await redis.set(`user:email:${user.email}`, user.id)
 
-    console.log(`✔ Employee user created → ${email} / emp123`)
+    console.log(`✔ Employee → ${user.email} / emp123`)
   }
-
-      // ----------------------
-    // Seed Payroll Run
-    // ----------------------
-    console.log("[v0] Seeding payroll run...")
-
-    const payrollRun = {
-      id: "pr-1",
-      period: "Mar 2024",
-      startDate: "2024-03-01",
-      endDate: "2024-03-31",
-      status: "Draft",
-    }
-
-    await redis.set(
-      `payroll-run:${payrollRun.id}`,
-      JSON.stringify(payrollRun)
-    )
-
-    console.log("✔ Payroll run created → Mar 2024")
-
-    // ----------------------
-    // Seed Payslips (Auto-generated)
-    // ----------------------
-  console.log("[v0] Generating payslips...")
-
-  for (const employee of employees) {
-    const structureRaw = await redis.hGet(
-      "payroll:salary_structures",
-      employee.salaryStructureId
-    )
-
-    if (!structureRaw) continue
-
-    const structure: SalaryStructure = JSON.parse(structureRaw)
-
-    const payslip = generatePayslip({
-      employee,
-      structure,
-      payrollRunId: payrollRun.id,
-      period: payrollRun.period,
-    })
-
-    await redis.set(
-      `payslip:${payslip.id}`,
-      JSON.stringify(payslip)
-    )
-  }
-
-  console.log("✔ Payslips generated for all employees")
-
 }
 
-// Run the seed function
+/* --------------------------------------------------
+ * Run
+ * -------------------------------------------------- */
+
 seedRedisData()
-  .then(() => {
-    console.log("[v0] Seeding script finished")
-    process.exit(0)
-  })
-  .catch((error) => {
-    console.error("[v0] Seeding script failed:", error)
-    process.exit(1)
-  })
+  .then(() => process.exit(0))
+  .catch(() => process.exit(1))

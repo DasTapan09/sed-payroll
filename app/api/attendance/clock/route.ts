@@ -1,31 +1,38 @@
+// app/api/attendance/clock/route.ts
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
-import { getRedisClient } from "@/lib/redis"
 import type { Attendance } from "@/lib/types"
+import { redis } from "@/lib/redis"
 
 export async function POST() {
   const user = await getCurrentUser()
 
   // 🔐 Only logged-in employees
   if (!user || user.role !== "employee" || !user.employeeId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401 }
+    )
   }
-
-  const redis = await getRedisClient()
 
   const today = new Date().toISOString().split("T")[0]
   const now = new Date().toISOString()
 
-  // Fetch all attendance (same as admin logic)
-  const raw = await redis.hGetAll("payroll:attendance")
-
-  const existing = Object.values(raw)
-    .map((v) => JSON.parse(v) as Attendance)
-    .find(
-      (a) =>
-        a.employeeId === user.employeeId &&
-        a.date === today
+  // Fetch all attendance (object-only)
+  const records =
+    await redis.hgetall<Record<string, Attendance>>(
+      "payroll:attendance"
     )
+
+  const attendanceList = records
+    ? Object.values(records)
+    : []
+
+  const existing = attendanceList.find(
+    (a) =>
+      a.employeeId === user.employeeId &&
+      a.date === today
+  )
 
   // 1️⃣ No record → CLOCK IN
   if (!existing) {
@@ -38,26 +45,27 @@ export async function POST() {
       checkInTime: now,
     }
 
-    await redis.hSet(
-      "payroll:attendance",
-      attendance.id,
-      JSON.stringify(attendance)
-    )
+    await redis.hset("payroll:attendance", {
+      [attendance.id]: attendance,
+    })
 
-    return NextResponse.json(attendance, { status: 201 })
+    return NextResponse.json(attendance, {
+      status: 201,
+    })
   }
 
   // 2️⃣ Clocked in but not out → CLOCK OUT
   if (existing.checkInTime && !existing.checkOutTime) {
-    existing.checkOutTime = now
+    const updated: Attendance = {
+      ...existing,
+      checkOutTime: now,
+    }
 
-    await redis.hSet(
-      "payroll:attendance",
-      existing.id,
-      JSON.stringify(existing)
-    )
+    await redis.hset("payroll:attendance", {
+      [updated.id]: updated,
+    })
 
-    return NextResponse.json(existing)
+    return NextResponse.json(updated)
   }
 
   // 3️⃣ Already clocked out → NO-OP

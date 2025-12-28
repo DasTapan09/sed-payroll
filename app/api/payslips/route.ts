@@ -1,30 +1,31 @@
+// app/api/payslips/route.ts
 import { NextResponse } from "next/server"
-import { getRedisClient } from "@/lib/redis"
 import { getCurrentUser } from "@/lib/auth"
 import type { Payslip } from "@/lib/types"
+import { redis } from "@/lib/redis"
 
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401 }
+    )
   }
 
-  const redis = await getRedisClient()
   const keys = await redis.keys("payslip:*")
-  const results: Payslip[] = []
-
-  for (const key of keys) {
-    const value = await redis.get(key)
-    if (!value) continue
-
-    const payslip = JSON.parse(value) as Payslip
-
-    if (user.role === "employee" && payslip.employeeId !== user.employeeId) {
-      continue
-    }
-
-    results.push(payslip)
+  if (keys.length === 0) {
+    return NextResponse.json([])
   }
+
+  // Fetch all payslips as objects
+  const payslips = await redis.mget<Payslip[]>(keys)
+
+  const results = (payslips.filter(Boolean) as Payslip[]).filter(
+    (p) =>
+      user.role === "admin" ||
+      p.employeeId === user.employeeId
+  )
 
   return NextResponse.json(results)
 }

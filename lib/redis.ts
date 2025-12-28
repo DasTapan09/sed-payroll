@@ -1,32 +1,21 @@
-import { createClient } from "redis"
+import { Redis } from "@upstash/redis"
 
-// Redis client singleton
-let redisClient: ReturnType<typeof createClient> | null = null
-
-export async function getRedisClient() {
-  if (!redisClient) {
-    // Support both REDIS_URL (standard) and KV_REST_API_URL (Upstash)
-    const redisUrl = process.env.REDIS_URL || process.env.KV_REST_API_URL
-
-    if (!redisUrl) {
-      throw new Error("Redis configuration missing. Please set REDIS_URL environment variable.")
-    }
-
-    redisClient = createClient({
-      url: redisUrl,
-    })
-
-    redisClient.on("error", (err) => console.error("Redis Client Error", err))
-    await redisClient.connect()
-  }
-
-  return redisClient
+if (!process.env.UPSTASH_REDIS_REST_URL) {
+  throw new Error("Missing UPSTASH_REDIS_REST_URL")
 }
 
-// Helper function to close Redis connection (useful for cleanup)
-export async function closeRedisClient() {
-  if (redisClient) {
-    await redisClient.quit()
-    redisClient = null
-  }
+if (!process.env.UPSTASH_REDIS_REST_TOKEN) {
+  throw new Error("Missing UPSTASH_REDIS_REST_TOKEN")
 }
+
+/**
+ * Upstash Redis client
+ * - Serverless-safe
+ * - Edge-compatible
+ * - No connection pooling
+ */
+export const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+})
+

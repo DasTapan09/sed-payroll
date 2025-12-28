@@ -1,16 +1,14 @@
 // lib/auth.ts
+import { redis } from "./redis"
 import { getSessionUserId } from "./session"
-import { getRedisClient } from "./redis"
 import type { User } from "./types"
 
 export async function getCurrentUser(): Promise<User | null> {
   const userId = await getSessionUserId()
   if (!userId) return null
 
-  const redis = await getRedisClient()
-  const userJson = await redis.get(`user:${userId}`)
+  const user = await redis.get<User>(`user:${userId}`)
+  if (!user) return null
 
-  if (!userJson) return null
-
-  return JSON.parse(userJson) as User
+  return user
 }
