@@ -61,6 +61,14 @@ export const dataStore = {
    * LEAVE BALANCE
    * ======================= */
 
+  async addEmployee(employee: Employee): Promise<Employee> {
+  await redis.hset("payroll:employees", {
+    [employee.id]: employee,
+  })
+
+  return employee
+  },
+
   async getLeaveBalance(
     employeeId: string
   ): Promise<LeaveBalance> {
