@@ -1,15 +1,20 @@
-// app/api/payslips/route.ts
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
 import type { Payslip } from "@/lib/types"
 import { redis } from "@/lib/redis"
 
+/**
+ * GET /api/payslips
+ * Admin only
+ */
 export async function GET() {
   const user = await getCurrentUser()
-  if (!user) {
+
+  // 🔐 Admin only
+  if (!user || user.role !== "admin") {
     return NextResponse.json(
-      { error: "Unauthorized" },
-      { status: 401 }
+      { error: "Forbidden" },
+      { status: 403 }
     )
   }
 
@@ -21,11 +26,7 @@ export async function GET() {
   // Fetch all payslips as objects
   const payslips = await redis.mget<Payslip[]>(keys)
 
-  const results = (payslips.filter(Boolean) as Payslip[]).filter(
-    (p) =>
-      user.role === "admin" ||
-      p.employeeId === user.employeeId
-  )
+  const results = payslips.filter(Boolean) as Payslip[]
 
   return NextResponse.json(results)
 }
