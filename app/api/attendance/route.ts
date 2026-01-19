@@ -17,16 +17,19 @@ import { redis } from "@/lib/redis"
  */
 export async function GET(req: Request) {
   const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // 🔐 Admin only
+  if (!user || user.role !== "admin") {
+    return NextResponse.json(
+      { error: "Forbidden" },
+      { status: 403 }
+    )
   }
 
   const url = new URL(req.url)
 
   const employeeFilter =
-    user.role === "admin"
-      ? url.searchParams.get("employeeId")
-      : user.employeeId
+    url.searchParams.get("employeeId")
 
   const startDate = url.searchParams.get("startDate")
   const endDate = url.searchParams.get("endDate")
@@ -38,14 +41,12 @@ export async function GET(req: Request) {
 
   let attendance = records ? Object.values(records) : []
 
-  // 🔐 Role isolation
   if (employeeFilter) {
     attendance = attendance.filter(
       (a) => a.employeeId === employeeFilter
     )
   }
 
-  // 📅 Date filtering
   if (startDate && endDate) {
     attendance = attendance.filter(
       (a) => a.date >= startDate && a.date <= endDate
