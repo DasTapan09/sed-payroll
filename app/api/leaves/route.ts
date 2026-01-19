@@ -4,20 +4,6 @@ import { getCurrentUser } from "@/lib/auth"
 import { dataStore } from "@/lib/data-store"
 import type { Leave } from "@/lib/types"
 
-function calculateLeaveDays(startDate: string, endDate: string): number {
-  const start = new Date(startDate)
-  const end = new Date(endDate)
-
-  if (end < start) {
-    throw new Error("End date cannot be before start date")
-  }
-
-  const diff =
-    (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
-
-  return Math.floor(diff) + 1 // inclusive
-}
-
 /**
  * GET /api/leaves
  * - Employee: only their leaves
@@ -30,12 +16,19 @@ export async function GET() {
   }
 
   try {
-    const leaves =
-      user.role === "admin"
-        ? await dataStore.getLeaves()
-        : await dataStore.getLeavesByEmployeeId(user.employeeId!)
+    if (user.role === "admin") {
+      const leaves = await dataStore.getLeaves()
+      return NextResponse.json(leaves)
+    }
 
-    return NextResponse.json(leaves)
+    if (user.role === "employee" && user.employeeId) {
+      const leaves = await dataStore.getLeavesByEmployeeId(
+        user.employeeId
+      )
+      return NextResponse.json(leaves)
+    }
+
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   } catch {
     return NextResponse.json(
       { error: "Failed to fetch leaves" },
@@ -50,8 +43,13 @@ export async function GET() {
  */
 export async function POST(req: Request) {
   const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // 🔐 Employee only
+  if (!user || user.role !== "employee" || !user.employeeId) {
+    return NextResponse.json(
+      { error: "Only employees can request leave" },
+      { status: 403 }
+    )
   }
 
   try {
@@ -75,6 +73,29 @@ export async function POST(req: Request) {
       )
     }
 
+    // 🔁 Overlapping leave check
+    const existingLeaves =
+      await dataStore.getLeavesByEmployeeId(user.employeeId)
+
+    const hasOverlap = existingLeaves.some((leave) => {
+      if (leave.status === "Rejected") return false
+
+      return (
+        leave.startDate <= endDate &&
+        leave.endDate >= startDate
+      )
+    })
+
+    if (hasOverlap) {
+      return NextResponse.json(
+        {
+          error:
+            "You already have a leave request overlapping this date range",
+        },
+        { status: 409 }
+      )
+    }
+
     const days =
       Math.floor(
         (end.getTime() - start.getTime()) /
@@ -83,8 +104,7 @@ export async function POST(req: Request) {
 
     const leave: Leave = {
       id: randomUUID(),
-      employeeId:
-        user.role === "admin" ? body.employeeId : user.employeeId!,
+      employeeId: user.employeeId,
       leaveType,
       startDate,
       endDate,
@@ -110,8 +130,13 @@ export async function POST(req: Request) {
  */
 export async function PUT(req: Request) {
   const user = await getCurrentUser()
+
+  // 🔐 Admin only
   if (!user || user.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    return NextResponse.json(
+      { error: "Forbidden" },
+      { status: 403 }
+    )
   }
 
   try {
@@ -125,7 +150,9 @@ export async function PUT(req: Request) {
       )
     }
 
-    const updatedLeave = await dataStore.updateLeave(id, { status })
+    const updatedLeave = await dataStore.updateLeave(id, {
+      status,
+    })
 
     return NextResponse.json(updatedLeave)
   } catch {
