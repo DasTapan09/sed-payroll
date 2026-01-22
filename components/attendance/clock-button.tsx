@@ -6,8 +6,10 @@ import type { Attendance } from "@/lib/types"
 
 export function ClockButton({
   initialRecord,
+  onSuccess,
 }: {
-  initialRecord?: Attendance
+  initialRecord?: Attendance,
+  onSuccess?: () => void
 }) {
   const [record, setRecord] = useState<Attendance | undefined>(initialRecord)
   const [loading, setLoading] = useState(false)
