@@ -23,7 +23,7 @@ jobs:
         allow-licenses: GPL-3.0, BSD-3-Clause, MIT
         # ([String]). Block the pull request on these licenses (optional)
         # Possible values: Any SPDX-compliant license identifiers or expressions from https://spdx.org/licenses/
-        deny-licenses: LGPL-2.0, BSD-2-Clause
+        # deny-licenses: LGPL-2.0, BSD-2-Clause
         
         # ([String]). Skip these GitHub Advisory Database IDs during detection (optional)
         # Possible values: Any valid GitHub Advisory Database ID from https://github.com/advisories
